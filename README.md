@@ -4,10 +4,10 @@
   </a>
 </p>
 
-<h1 align="center">Evo CRM Agent Processor</h1>
+<h1 align="center">AutomaLead Agent Processor</h1>
 
 <p align="center">
-  Agent execution, session orchestration, and knowledge search service for the Evo CRM Community.
+  Agent execution, session orchestration, and knowledge search service for the AutomaLead Community.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ## About
 
-**Evo CRM Agent Processor** is the AI execution core of the Evo CRM Community. It orchestrates intelligent workflows between multiple agents, manages sessions and artifacts, executes Google ADK agents, and integrates with vector databases for semantic knowledge search.
+**AutomaLead Agent Processor** is the AI execution core of the AutomaLead Community. It orchestrates intelligent workflows between multiple agents, manages sessions and artifacts, executes Google ADK agents, and integrates with vector databases for semantic knowledge search.
 
 Built with FastAPI, it provides:
 
@@ -42,9 +42,9 @@ Built with FastAPI, it provides:
 - RESTful API with FastAPI
 - Observability via OpenTelemetry
 
-## Part of the Evo CRM Community
+## Part of the AutomaLead Community
 
-Evo CRM Agent Processor is part of the [Evo CRM Community](https://github.com/evolution-foundation/evo-crm-community) ecosystem maintained by Evolution Foundation. To use the full stack, clone the umbrella repository with submodules:
+AutomaLead Agent Processor is part of the [AutomaLead Community](https://github.com/evolution-foundation/evo-crm-community) ecosystem maintained by AutomaLead To use the full stack, clone the umbrella repository with submodules:
 
 ```bash
 git clone --recurse-submodules git@github.com:evolution-foundation/evo-crm-community.git
@@ -143,11 +143,11 @@ The processor sits between the bot runtime and the agent execution layer:
 ```
 Evo Bot Runtime
       ↓
-Evo CRM Agent Processor  ← (you are here)
+AutomaLead Agent Processor  ← (you are here)
       ↓
 Google ADK / LangGraph + Vector DBs (Pinecone/Qdrant/OpenSearch)
       ↓
-Evo CRM Backend (persistence)
+AutomaLead Backend (persistence)
 ```
 
 Key responsibilities:
@@ -199,11 +199,11 @@ This service builds on excellent open-source software:
 
 ## License
 
-Evo CRM Agent Processor is licensed under the Apache License 2.0. See [LICENSE](./LICENSE) for details.
+AutomaLead Agent Processor is licensed under the Apache License 2.0. See [LICENSE](./LICENSE) for details.
 
 ## Trademarks
 
-"Evolution Foundation", "Evolution" and "Evo CRM Agent Processor" are trademarks of Evolution Foundation. See [TRADEMARKS.md](./TRADEMARKS.md) for the brand assets policy.
+"Evolution Foundation", "Evolution" and "AutomaLead Agent Processor" are trademarks of AutomaLead See [TRADEMARKS.md](./TRADEMARKS.md) for the brand assets policy.
 
 Third-party attributions are documented in [NOTICE](./NOTICE).
 
