@@ -273,95 +273,15 @@ class StreamingRunner:
                                     logger.warning(f"Could not preload memory: {e}")
                         
                         # Preload knowledge if enabled (before processing user message)
-                        if isinstance(agent_config, dict) and agent_config.get("preload_knowledge") and agent_config.get("load_knowledge"):
-                            logger.info(f"Preloading knowledge for agent {agent_id}")
-                            try:
-                                from src.config.settings import settings
-                                import httpx
-                                
-                                knowledge_tags = agent_config.get("knowledge_tags")
-                                knowledge_base_config_id = agent_config.get("knowledge_base_config_id")
-                                knowledge_max_results = agent_config.get("knowledge_max_results", 5)
+                        try:
+                            from src.services.adk.runners.knowledge_preload import preload_knowledge, build_knowledge_event
 
-                                # Call /knowledge/search endpoint directly for preload
-                                base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
-                                url = f"{base_url}/knowledge/search"
-
-                                # Use a general query for preload context
-                                payload = {
-                                    "query": "general context and information",
-                                    "tags": knowledge_tags or [],
-                                    "max_results": knowledge_max_results,
-                                }
-
-                                headers = {
-                                    "Content-Type": "application/json",
-                                    "Accept": "application/json",
-                                }
-                                
-                                # Add service token for service-to-service authentication
-                                if settings.KNOWLEDGE_SERVICE_API_TOKEN:
-                                    headers["X-Service-Token"] = settings.KNOWLEDGE_SERVICE_API_TOKEN
-                                
-                                if knowledge_base_config_id:
-                                    headers["x-knowledge-base-config-id"] = str(knowledge_base_config_id)
-                                
-                                async with httpx.AsyncClient(timeout=30.0) as client:
-                                    response = await client.post(url, json=payload, headers=headers)
-                                    response.raise_for_status()
-                                    response_data = response.json()
-                                
-                                knowledge_results = response_data.get("results", [])
-                                total = response_data.get("total", 0)
-                                
-                                if knowledge_results:
-                                    logger.info(f"Preloaded {len(knowledge_results)} knowledge entries for agent {agent_id}")
-                                    
-                                    # Add preloaded knowledge as system events to the session
-                                    from google.adk.events import Event
-                                    from google.genai.types import Content, Part
-                                    import time
-                                    
-                                    # Combine all knowledge entries into a single context message
-                                    knowledge_context_parts = []
-                                    knowledge_context_parts.append("Preloaded knowledge base context:\n\n")
-                                    
-                                    for idx, result in enumerate(knowledge_results, 1):
-                                        knowledge = result.get("knowledge", {})
-                                        knowledge_title = knowledge.get("title", "")
-                                        knowledge_content = knowledge.get("content", "")
-                                        knowledge_description = knowledge.get("description", "")
-                                        
-                                        if knowledge_content:
-                                            knowledge_context_parts.append(f"--- Knowledge Entry {idx} ---\n")
-                                            if knowledge_title:
-                                                knowledge_context_parts.append(f"Title: {knowledge_title}\n")
-                                            if knowledge_description:
-                                                knowledge_context_parts.append(f"Description: {knowledge_description}\n")
-                                            knowledge_context_parts.append(f"Content: {knowledge_content}\n")
-                                            knowledge_context_parts.append("\n")
-                                    
-                                    if len(knowledge_context_parts) > 1:  # More than just the header
-                                        knowledge_context_text = "".join(knowledge_context_parts).strip()
-                                        
-                                        # Create a system event with the knowledge context
-                                        knowledge_event = Event(
-                                            invocation_id=f"preload_knowledge_{int(time.time())}",
-                                            author="system",
-                                            content=Content(
-                                                role="system",
-                                                parts=[Part(text=knowledge_context_text)]
-                                            ),
-                                            timestamp=time.time(),
-                                        )
-                                        
-                                        # Add the event to the session
-                                        await session_service.append_event(session, knowledge_event)
-                                        logger.debug(f"Added {len(knowledge_results)} knowledge entries to session context")
-                                else:
-                                    logger.debug(f"No knowledge entries found for preload (agent {agent_id})")
-                            except Exception as e:
-                                logger.warning(f"Could not preload knowledge: {e}")
+                            knowledge_context = await preload_knowledge(agent_config)
+                            if knowledge_context:
+                                await session_service.append_event(session, build_knowledge_event(knowledge_context))
+                                logger.debug("Added preloaded knowledge to session context")
+                        except Exception as e:
+                            logger.warning(f"Could not preload knowledge: {e}")
                 except Exception as e:
                     logger.debug(f"Could not check preload config: {e}")
 
