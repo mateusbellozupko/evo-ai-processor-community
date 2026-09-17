@@ -12,7 +12,7 @@ is stubbed to return None, which makes each runner take its documented
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from src.services.adk.runners.standard_runner import StandardRunner
 from src.services.adk.runners.streaming_runner import StreamingRunner
@@ -127,19 +127,22 @@ async def test_preload_memory_failure_is_isolated_from_knowledge_preload(runner_
     with _patch_agent(knowledge_config), patch(logger_target) as mock_logger, patch(
         "src.services.adk.runners.memory_preload.preload_memory",
         new=AsyncMock(side_effect=RuntimeError("memory service down")),
-    ) as mock_preload:
+    ) as mock_preload, patch(
+        "src.services.adk.runners.knowledge_preload.preload_knowledge",
+        new=AsyncMock(return_value="Preloaded knowledge base context:\n\n--- Knowledge Entry 1 ---"),
+    ) as mock_preload_knowledge:
         # Must not raise out of the runner.
-        await _drive(runner_cls, session_service, _mock_memory_service())
+        session = await _drive(runner_cls, session_service, _mock_memory_service())
 
     mock_preload.assert_awaited_once()
 
     warnings = [c.args[0] for c in mock_logger.warning.call_args_list]
-    infos = [c.args[0] for c in mock_logger.info.call_args_list]
 
     # Logged at warning, not swallowed by the outer debug-level handler.
     assert any("Could not preload memory: memory service down" in m for m in warnings)
     assert not any("Could not check preload config" in str(c) for c in mock_logger.debug.call_args_list)
-    # Knowledge preload was still entered despite the memory preload blowing up.
-    # (Knowledge preload has its own pre-existing breakage - settings has no
-    # KNOWLEDGE_SERVICE_URL - so we assert it was reached, not that it succeeded.)
-    assert any("Preloading knowledge for agent agent-1" in m for m in infos)
+    # Knowledge preload was still entered despite the memory preload blowing up:
+    # it was actually called, and (since the memory preload failed before
+    # appending anything) its result is the only event appended to the session.
+    mock_preload_knowledge.assert_awaited_once()
+    session_service.append_event.assert_awaited_once_with(session, ANY)
