@@ -29,10 +29,9 @@
 
 import uuid
 from typing import Optional
-import httpx
 from google.adk.tools import FunctionTool, ToolContext
 from src.utils.logger import setup_logger
-from src.config.settings import settings
+from src.services.memory_service import memory_service
 
 logger = setup_logger(__name__)
 
@@ -98,69 +97,22 @@ async def create_compress_memory_tool(
                 f"Compressing memory for app '{app_name}', user '{user_id}' (force={force})"
             )
             
-            # Call knowledge service HTTP API
-            # KNOWLEDGE_SERVICE_URL already includes /api/v1
-            base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
-            url = f"{base_url}/memory/compress"
-            
-            payload = {
-                "app_name": str(app_name),
-                "user_id": str(user_id),
-                "force": force,
-            }
-            
-            # Build headers with memory_base_config_id and service token
-            headers = {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-            
-            # Add service token for service-to-service authentication
-            if settings.KNOWLEDGE_SERVICE_API_TOKEN:
-                headers["X-Service-Token"] = settings.KNOWLEDGE_SERVICE_API_TOKEN
-                logger.debug("Added X-Service-Token header for memory compression request")
-            else:
-                logger.warning("KNOWLEDGE_SERVICE_API_TOKEN not configured - compression request may fail")
-            
-            if memory_base_config_id:
-                headers["x-memory-base-config-id"] = str(memory_base_config_id)
-            
-            # Make HTTP request
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    return {
-                        "status": "success" if result.get("success") else "error",
-                        "message": result.get("message", "Memory compression completed"),
-                        "messages_compressed": result.get("messages_compressed", 0),
-                        "summary_id": result.get("summary_id"),
-                        "summary_content": result.get("summary_content"),
-                    }
-                elif response.status_code == 400:
-                    error_detail = response.json().get("detail", "Bad request")
-                    return {
-                        "status": "error",
-                        "message": f"Compression failed: {error_detail}",
-                        "messages_compressed": 0,
-                    }
-                else:
-                    error_detail = response.json().get("detail", f"HTTP {response.status_code}")
-                    logger.error(f"HTTP error compressing memory: {response.status_code} - {error_detail}")
-                    return {
-                        "status": "error",
-                        "message": f"Compression failed: {error_detail}",
-                        "messages_compressed": 0,
-                    }
-                    
-        except httpx.TimeoutException:
-            logger.error("Timeout compressing memory")
+            result = await memory_service.compress_memory(
+                app_name=app_name,
+                user_id=user_id,
+                force=force,
+                compression_interval=None,
+                memory_base_config_id=memory_base_config_id,
+            )
+
             return {
-                "status": "error",
-                "message": "Timeout while compressing memory. The operation may have completed, but no response was received.",
-                "messages_compressed": 0,
+                "status": "success" if result.get("success") else "error",
+                "message": result.get("message", "Memory compression completed"),
+                "messages_compressed": result.get("messages_compressed", 0),
+                "summary_id": result.get("summary_id"),
+                "summary_content": result.get("summary_content"),
             }
+
         except Exception as e:
             logger.error(f"Error compressing memory: {e}")
             return {
