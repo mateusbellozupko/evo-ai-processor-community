@@ -183,95 +183,17 @@ class StandardRunner:
                     agent = await get_agent(self.db, agent_id)
                     if agent and agent.config:
                         agent_config = agent.config if isinstance(agent.config, dict) else {}
-                        if isinstance(agent_config, dict) and agent_config.get("preload_memory") and agent_config.get("load_memory"):
-                            logger.info(f"Preloading memory for agent {agent_id}, user {effective_user_id}")
-                            # Call memory load endpoint directly via HTTP to get medium_term summaries
-                            from src.services.memory_service import HttpMemoryService
-                            from src.config.settings import settings
-                            import httpx
-                            
-                            if isinstance(memory_service, HttpMemoryService):
-                                memory_base_config_id = agent_config.get("memory_base_config_id")
 
-                                # Call /memory/load endpoint directly (preload mode - empty query returns medium_term summaries)
-                                try:
-                                    base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
-                                    url = f"{base_url}/memory/load"
+                        from src.services.adk.runners.memory_preload import preload_memory
+                        memory_event = await preload_memory(
+                            agent_config=agent_config,
+                            agent_id=agent_id,
+                            effective_user_id=effective_user_id,
+                            session=session,
+                        )
+                        if memory_event:
+                            await session_service.append_event(session, memory_event)
 
-                                    params = {
-                                        "app_name": agent_id,
-                                        "user_id": effective_user_id,
-                                        "query": "",  # Empty query loads medium_term summaries
-                                        "max_results": 10,
-                                    }
-
-                                    headers = {
-                                        "Content-Type": "application/json",
-                                        "Accept": "application/json",
-                                    }
-                                    
-                                    # Add service token for service-to-service authentication
-                                    if settings.KNOWLEDGE_SERVICE_API_TOKEN:
-                                        headers["X-Service-Token"] = settings.KNOWLEDGE_SERVICE_API_TOKEN
-                                    
-                                    if memory_base_config_id:
-                                        headers["x-memory-base-config-id"] = str(memory_base_config_id)
-                                    
-                                    async with httpx.AsyncClient(timeout=30.0) as client:
-                                        response = await client.get(url, params=params, headers=headers)
-                                        response.raise_for_status()
-                                        response_data = response.json()
-                                    
-                                    memory_results = response_data.get("memories", [])
-                                    total = response_data.get("total", 0)
-                                    
-                                    if memory_results:
-                                        logger.info(f"Preloaded {len(memory_results)} memory summaries for agent {agent_id}")
-                                        
-                                        # Add preloaded memories as system events to the session
-                                        # This makes them available to the LLM as context
-                                        from google.adk.events import Event
-                                        from google.genai.types import Content, Part
-                                        import time
-                                        
-                                        # Combine all memory summaries into a single context message
-                                        memory_context_parts = []
-                                        memory_context_parts.append("Previous conversation context:\n\n")
-                                        
-                                        for idx, memory in enumerate(memory_results, 1):
-                                            memory_content = memory.get("content", "")
-                                            memory_metadata = memory.get("metadata", {})
-                                            memory_timestamp = memory.get("timestamp")
-                                            
-                                            if memory_content:
-                                                memory_context_parts.append(f"--- Summary {idx} ---\n")
-                                                memory_context_parts.append(f"{memory_content}\n")
-                                                if memory_timestamp:
-                                                    memory_context_parts.append(f"(Date: {memory_timestamp})\n")
-                                                memory_context_parts.append("\n")
-                                        
-                                        if len(memory_context_parts) > 1:  # More than just the header
-                                            memory_context_text = "".join(memory_context_parts).strip()
-                                            
-                                            # Create a system event with the memory context
-                                            memory_event = Event(
-                                                invocation_id=f"preload_memory_{int(time.time())}",
-                                                author="system",
-                                                content=Content(
-                                                    role="system",
-                                                    parts=[Part(text=memory_context_text)]
-                                                ),
-                                                timestamp=time.time(),
-                                            )
-                                            
-                                            # Add the event to the session
-                                            await session_service.append_event(session, memory_event)
-                                            logger.debug(f"Added {len(memory_results)} memory summaries to session context")
-                                    else:
-                                        logger.debug(f"No memory summaries found for preload (agent {agent_id}, user {effective_user_id})")
-                                except Exception as e:
-                                    logger.warning(f"Could not preload memory: {e}")
-                        
                         # Preload knowledge if enabled (before processing user message)
                         if isinstance(agent_config, dict) and agent_config.get("preload_knowledge") and agent_config.get("load_knowledge"):
                             logger.info(f"Preloading knowledge for agent {agent_id}")
