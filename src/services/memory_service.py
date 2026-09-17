@@ -55,12 +55,15 @@ class HttpMemoryService(BaseMemoryService):
         """Initialize the HTTP memory service.
         
         Args:
-            base_url: Base URL for the knowledge service (defaults to settings.KNOWLEDGE_SERVICE_URL)
+            base_url: Base URL for the memory service (defaults to
+                settings.EVO_AI_CRM_URL + "/api/v1/internal", where the Rails
+                CRM's internal memory endpoints actually live)
             auth_token: Optional authentication token for service-to-service calls
             token_type: Type of auth token ('bearer' or 'api_access_token')
         """
         super().__init__()
-        self.base_url = (base_url or settings.CORE_SERVICE_URL).rstrip("/")
+        default_base_url = settings.EVO_AI_CRM_URL.rstrip("/") + "/api/v1/internal"
+        self.base_url = (base_url or default_base_url).rstrip("/")
         self.auth_token = auth_token
         self.token_type = token_type
         # Store last used memory_base_config_id for search operations
