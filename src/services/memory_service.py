@@ -310,6 +310,55 @@ class HttpMemoryService(BaseMemoryService):
             logger.error(f"Error adding event to memory: {e}")
             # Don't raise - memory addition failures shouldn't break agent execution
 
+    async def compress_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        force: bool = False,
+        compression_interval: Optional[int] = None,
+        memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Dict[str, Any]:
+        """Trigger memory compression via HTTP.
+
+        Args:
+            app_name: Application name (usually agent_id)
+            user_id: User ID
+            force: If True, compress even if compression_interval is not reached
+            compression_interval: Compress every N messages (optional)
+            memory_base_config_id: Optional UUID of the memory base configuration to use
+
+        Returns:
+            Dict with compression result. Never raises - returns a failure dict on error.
+        """
+        try:
+            url = f"{self.base_url}/memory/compress"
+            payload = {
+                "app_name": str(app_name),
+                "user_id": str(user_id),
+                "force": force,
+            }
+            if compression_interval is not None:
+                payload["compression_interval"] = compression_interval
+
+            headers = self._get_headers()
+            if memory_base_config_id:
+                headers["x-memory-base-config-id"] = str(memory_base_config_id)
+
+            response = await http_client.do_post_json(
+                url=url,
+                payload=payload,
+                headers=headers,
+                expected_status=200
+            )
+            return response
+
+        except HttpError as e:
+            logger.error(f"HTTP error compressing memory: {e.message} (status: {e.status_code})")
+            return {"success": False, "messages_compressed": 0, "message": e.message}
+        except Exception as e:
+            logger.error(f"Error compressing memory: {e}")
+            return {"success": False, "messages_compressed": 0, "message": str(e)}
+
     async def search_memory(
         self,
         *,
