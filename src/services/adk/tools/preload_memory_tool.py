@@ -94,15 +94,18 @@ async def create_preload_memory_tool(
                 + (f" using config {memory_base_config_id}" if memory_base_config_id else "")
             )
 
-            response = await memory_service.search_memory(
+            # GET /memory/load returns medium-term summaries only; search_memory
+            # with a blank query would also return raw short-term events.
+            result = await memory_service.load_memory(
                 app_name=app_name,
                 user_id=user_id,
-                query="",
                 max_results=effective_max_results,
                 memory_base_config_id=memory_base_config_id,
             )
 
-            if not response.memories:
+            raw_memories = result.get("memories", []) if isinstance(result, dict) else []
+
+            if not raw_memories:
                 return {
                     "status": "no_memories",
                     "message": "No memory summaries found for this conversation. This is normal for new conversations.",
@@ -112,10 +115,10 @@ async def create_preload_memory_tool(
 
             memories = [
                 {
-                    "content": entry.content.parts[0].text if entry.content and entry.content.parts else "",
-                    "timestamp": entry.timestamp,
+                    "content": mem.get("content", ""),
+                    "timestamp": mem.get("timestamp"),
                 }
-                for entry in response.memories
+                for mem in raw_memories
             ]
 
             return {
