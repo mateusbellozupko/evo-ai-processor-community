@@ -1064,6 +1064,7 @@ class LlmAgentBuilder:
             # Add compress memory tool
             compress_memory_tool = await create_compress_memory_tool(
                 memory_base_config_id=str(memory_base_config_id) if memory_base_config_id else None,
+                compression_interval=agent.config.get("memory_medium_term_compression_interval"),
             )
             memory_tools.append(compress_memory_tool)
             logger.debug(

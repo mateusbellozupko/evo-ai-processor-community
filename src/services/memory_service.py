@@ -29,6 +29,7 @@
 
 import uuid
 from typing import TYPE_CHECKING, Optional, Dict, Any, Union
+from urllib.parse import urlencode
 from google.adk.memory.base_memory_service import BaseMemoryService
 from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.memory.base_memory_service import SearchMemoryResponse
@@ -66,9 +67,16 @@ class HttpMemoryService(BaseMemoryService):
         self._last_memory_base_config_id: Optional[Union[str, uuid.UUID]] = None
         logger.info(f"HttpMemoryService initialized with base_url: {self.base_url}")
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(
+        self,
+        memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Dict[str, str]:
         """Build headers for HTTP requests.
-        
+
+        Args:
+            memory_base_config_id: Optional memory base config ID; when given it
+                is sent as the x-memory-base-config-id header.
+
         Returns:
             Dictionary with headers
         """
@@ -92,7 +100,11 @@ class HttpMemoryService(BaseMemoryService):
                 headers["api_access_token"] = self.auth_token
             elif self.token_type == "service_token":
                 headers["X-Service-Token"] = self.auth_token
-        
+
+        if memory_base_config_id:
+            headers["x-memory-base-config-id"] = str(memory_base_config_id)
+            logger.debug(f"Using memory base config ID: {memory_base_config_id}")
+
         return headers
 
     async def add_session_to_memory(
@@ -208,16 +220,8 @@ class HttpMemoryService(BaseMemoryService):
                 payload["compression_interval"] = compression_interval
             
             # Build headers with memory_base_config_id
-            headers = self._get_headers()
-            
-            # Add memory_base_config_id header if provided
-            if memory_base_config_id:
-                if isinstance(memory_base_config_id, uuid.UUID):
-                    headers["x-memory-base-config-id"] = str(memory_base_config_id)
-                else:
-                    headers["x-memory-base-config-id"] = str(memory_base_config_id)
-                logger.debug(f"Using memory base config ID: {memory_base_config_id}")
-            
+            headers = self._get_headers(memory_base_config_id)
+
             logger.info(f"Adding session to memory via HTTP: app={app_name}, user={user_id}, memory_base_config_id={memory_base_config_id}")
             
             response = await http_client.do_post_json(
@@ -284,23 +288,15 @@ class HttpMemoryService(BaseMemoryService):
                 payload["compression_interval"] = compression_interval
             
             # Build headers with memory_base_config_id
-            headers = self._get_headers()
-            
-            # Add memory_base_config_id header if provided
-            if memory_base_config_id:
-                if isinstance(memory_base_config_id, uuid.UUID):
-                    headers["x-memory-base-config-id"] = str(memory_base_config_id)
-                else:
-                    headers["x-memory-base-config-id"] = str(memory_base_config_id)
-                logger.debug(f"Using memory base config ID: {memory_base_config_id}")
-            
+            headers = self._get_headers(memory_base_config_id)
+
             response = await http_client.do_post_json(
                 url=url,
                 payload=payload,
                 headers=headers,
                 expected_status=201
             )
-            
+
             logger.debug(f"Successfully added event to memory: {response}")
             
         except HttpError as e:
@@ -309,6 +305,100 @@ class HttpMemoryService(BaseMemoryService):
         except Exception as e:
             logger.error(f"Error adding event to memory: {e}")
             # Don't raise - memory addition failures shouldn't break agent execution
+
+    async def compress_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        force: bool = False,
+        compression_interval: Optional[int] = None,
+        memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Dict[str, Any]:
+        """Trigger memory compression via HTTP.
+
+        Args:
+            app_name: Application name (usually agent_id)
+            user_id: User ID
+            force: If True, compress even if compression_interval is not reached
+            compression_interval: Compress every N messages (optional)
+            memory_base_config_id: Optional UUID of the memory base configuration to use
+
+        Returns:
+            Dict with compression result. Never raises - returns a failure dict on error.
+        """
+        try:
+            url = f"{self.base_url}/memory/compress"
+            payload = {
+                "app_name": str(app_name),
+                "user_id": str(user_id),
+                "force": force,
+            }
+            if compression_interval is not None:
+                payload["compression_interval"] = compression_interval
+
+            headers = self._get_headers(memory_base_config_id)
+
+            response = await http_client.do_post_json(
+                url=url,
+                payload=payload,
+                headers=headers,
+                expected_status=200
+            )
+            return response
+
+        except HttpError as e:
+            logger.error(f"HTTP error compressing memory: {e.message} (status: {e.status_code})")
+            return {"success": False, "messages_compressed": 0, "message": e.message}
+        except Exception as e:
+            logger.error(f"Error compressing memory: {e}")
+            return {"success": False, "messages_compressed": 0, "message": str(e)}
+
+    async def load_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        max_results: int = 10,
+        memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Dict[str, Any]:
+        """Load medium-term memory summaries via HTTP (GET /memory/load).
+
+        Unlike search_memory (which also returns raw short-term events for a
+        real query), this always returns summaries only - the right shape for
+        preloading conversation context at the start of a turn. Never raises;
+        returns an empty result on any error.
+
+        Args:
+            app_name: Application name (usually agent_id)
+            user_id: User ID to load memories for
+            max_results: Maximum number of summaries to return
+            memory_base_config_id: Optional UUID of the memory base configuration to use
+
+        Returns:
+            Dict shaped {"memories": [{"content": ..., "timestamp": ..., "metadata": {...}}], "total": N}
+        """
+        try:
+            # http_client.do_get_json does not accept a params argument, so the
+            # query string is encoded into the URL here.
+            params = {"app_name": str(app_name), "user_id": str(user_id), "max_results": max_results}
+            url = f"{self.base_url}/memory/load?{urlencode(params)}"
+
+            headers = self._get_headers(memory_base_config_id)
+
+            logger.info(f"Loading memory via HTTP: app={app_name}, user={user_id}, memory_base_config_id={memory_base_config_id}")
+
+            response = await http_client.do_get_json(
+                url=url,
+                headers=headers,
+                expected_status=200
+            )
+            return response
+
+        except HttpError as e:
+            logger.error(f"HTTP error loading memory: {e.message} (status: {e.status_code})")
+            return {"memories": [], "total": 0}
+        except Exception as e:
+            logger.error(f"Error loading memory: {e}")
+            return {"memories": [], "total": 0}
 
     async def search_memory(
         self,
@@ -346,13 +436,8 @@ class HttpMemoryService(BaseMemoryService):
             }
             
             # Build headers with memory_base_config_id
-            headers = self._get_headers()
-            if effective_memory_base_config_id:
-                if isinstance(effective_memory_base_config_id, uuid.UUID):
-                    headers["x-memory-base-config-id"] = str(effective_memory_base_config_id)
-                else:
-                    headers["x-memory-base-config-id"] = str(effective_memory_base_config_id)
-            
+            headers = self._get_headers(effective_memory_base_config_id)
+
             logger.info(f"Searching memory via HTTP: app={app_name}, user={user_id}, query='{query}', memory_base_config_id={effective_memory_base_config_id}")
             
             response_data = await http_client.do_post_json(
