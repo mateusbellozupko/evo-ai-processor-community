@@ -27,7 +27,6 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-import uuid
 from typing import Optional
 from google.adk.tools import FunctionTool, ToolContext
 from src.utils.logger import setup_logger
@@ -38,11 +37,15 @@ logger = setup_logger(__name__)
 
 async def create_compress_memory_tool(
     memory_base_config_id: Optional[str] = None,
+    compression_interval: Optional[int] = None,
 ) -> FunctionTool:
     """Factory function to create a memory compression tool.
 
     Args:
         memory_base_config_id: Optional UUID of the memory base configuration to use
+        compression_interval: Optional per-agent compression interval
+            (agent config's memory_medium_term_compression_interval). When None
+            the service falls back to its own default interval.
     """
     async def compress_memory_with_client(
         force: bool = False,
@@ -62,11 +65,17 @@ async def create_compress_memory_tool(
         Returns:
             Dictionary with compression status and details:
             {
-                "status": "success" | "no_messages" | "not_ready" | "error",
+                "status": "success" | "error",
                 "message": "Human-readable message",
                 "messages_compressed": int,
                 "summary_id": str (optional)
             }
+
+            "error" covers both a genuine failure and the "not enough events to
+            compress yet" case: the internal /memory/compress endpoint reports
+            both as {"success": false, "messages_compressed": 0, "message": ...}
+            with identical keys, so the two cannot be told apart from the
+            response dict alone. "message" carries the distinction in prose.
         """
         try:
             # Extract app_name and user_id from tool_context
@@ -101,7 +110,7 @@ async def create_compress_memory_tool(
                 app_name=app_name,
                 user_id=user_id,
                 force=force,
-                compression_interval=None,
+                compression_interval=compression_interval,
                 memory_base_config_id=memory_base_config_id,
             )
 
@@ -141,12 +150,15 @@ Args:
 Returns:
     Dictionary with compression status and details:
     {
-        "status": "success" | "no_messages" | "not_ready" | "error",
+        "status": "success" | "error",
         "message": "Human-readable message",
         "messages_compressed": int,
         "summary_id": str (optional),
         "summary_content": str (optional) - The content of the created summary
     }
+
+"error" is also returned when there simply were not enough events to compress
+yet; read "message" to tell that apart from a real failure.
 """
     
     return FunctionTool(func=compress_memory_with_client)

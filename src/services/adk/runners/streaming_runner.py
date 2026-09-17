@@ -184,15 +184,20 @@ class StreamingRunner:
                     if agent and agent.config:
                         agent_config = agent.config if isinstance(agent.config, dict) else {}
 
-                        from src.services.adk.runners.memory_preload import preload_memory
-                        memory_event = await preload_memory(
-                            agent_config=agent_config,
-                            agent_id=agent_id,
-                            effective_user_id=effective_user_id,
-                            session=session,
-                        )
-                        if memory_event:
-                            await session_service.append_event(session, memory_event)
+                        # Memory preload gets its own try/except so a memory
+                        # failure is logged loudly and does not skip the
+                        # knowledge preload below it.
+                        try:
+                            from src.services.adk.runners.memory_preload import preload_memory
+                            memory_event = await preload_memory(
+                                agent_config=agent_config,
+                                agent_id=agent_id,
+                                effective_user_id=effective_user_id,
+                            )
+                            if memory_event:
+                                await session_service.append_event(session, memory_event)
+                        except Exception as e:
+                            logger.warning(f"Could not preload memory: {e}")
 
                         # Preload knowledge if enabled (before processing user message)
                         if isinstance(agent_config, dict) and agent_config.get("preload_knowledge") and agent_config.get("load_knowledge"):
