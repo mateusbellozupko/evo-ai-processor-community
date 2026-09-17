@@ -27,11 +27,9 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-import uuid
 from typing import Optional
-import httpx
 from google.adk.tools import FunctionTool, ToolContext
-from src.config.settings import settings
+from src.services.memory_service import memory_service
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -96,91 +94,37 @@ async def create_preload_memory_tool(
                 + (f" using config {memory_base_config_id}" if memory_base_config_id else "")
             )
 
-            # Call knowledge service HTTP API
-            # KNOWLEDGE_SERVICE_URL already includes /api/v1
-            base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
-            url = f"{base_url}/memory/load"
-            
-            # Use empty query for preload (loads medium_term summaries)
-            params = {
-                "app_name": app_name,
-                "user_id": user_id,
-                "query": "",  # Empty query loads medium_term summaries
-                "max_results": effective_max_results,
-            }
-            
-            # Build headers with memory_base_config_id and service token
-            headers = {
-                "Accept": "application/json",
-            }
-            
-            # Add service token for service-to-service authentication
-            if settings.KNOWLEDGE_SERVICE_API_TOKEN:
-                headers["X-Service-Token"] = settings.KNOWLEDGE_SERVICE_API_TOKEN
-                logger.debug("Added X-Service-Token header for memory preload request")
-            else:
-                logger.warning("KNOWLEDGE_SERVICE_API_TOKEN not configured - memory preload request may fail")
-            
-            if memory_base_config_id:
-                headers["x-memory-base-config-id"] = str(memory_base_config_id)
-            
-            # Make HTTP request
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, params=params, headers=headers)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    memories = result.get("memories", [])
-                    
-                    if not memories:
-                        return {
-                            "status": "no_memories",
-                            "message": "No memory summaries found for this conversation. This is normal for new conversations.",
-                            "memories": [],
-                            "total": 0,
-                        }
-                    
-                    # Format memories for display
-                    formatted_memories = []
-                    for mem in memories:
-                        formatted_memories.append({
-                            "content": mem.get("content", ""),
-                            "timestamp": mem.get("timestamp"),
-                            "metadata": mem.get("metadata", {}),
-                        })
-                    
-                    return {
-                        "status": "success",
-                        "message": f"Loaded {len(formatted_memories)} memory summaries from previous conversations",
-                        "memories": formatted_memories,
-                        "total": len(formatted_memories),
-                    }
-                elif response.status_code == 400:
-                    error_detail = response.json().get("detail", "Bad request")
-                    return {
-                        "status": "error",
-                        "message": f"Memory preload failed: {error_detail}",
-                        "memories": [],
-                        "total": 0,
-                    }
-                else:
-                    error_detail = response.json().get("detail", f"HTTP {response.status_code}")
-                    logger.error(f"HTTP error preloading memory: {response.status_code} - {error_detail}")
-                    return {
-                        "status": "error",
-                        "message": f"Memory preload failed: {error_detail}",
-                        "memories": [],
-                        "total": 0,
-                    }
-                    
-        except httpx.TimeoutException:
-            logger.error("Timeout preloading memory")
+            response = await memory_service.search_memory(
+                app_name=app_name,
+                user_id=user_id,
+                query="",
+                max_results=effective_max_results,
+                memory_base_config_id=memory_base_config_id,
+            )
+
+            if not response.memories:
+                return {
+                    "status": "no_memories",
+                    "message": "No memory summaries found for this conversation. This is normal for new conversations.",
+                    "memories": [],
+                    "total": 0,
+                }
+
+            memories = [
+                {
+                    "content": entry.content.parts[0].text if entry.content and entry.content.parts else "",
+                    "timestamp": entry.timestamp,
+                }
+                for entry in response.memories
+            ]
+
             return {
-                "status": "error",
-                "message": "Timeout while preloading memory. The operation may have completed, but no response was received.",
-                "memories": [],
-                "total": 0,
+                "status": "success",
+                "message": f"Loaded {len(memories)} memory summaries.",
+                "memories": memories,
+                "total": len(memories),
             }
+
         except Exception as e:
             logger.error(f"Error preloading memory: {e}")
             return {
