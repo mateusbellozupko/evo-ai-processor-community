@@ -316,6 +316,13 @@ def create_transfer_to_human_tool(
                         f"{effective_conversation_id}: {message_send_error}"
                     )
 
+            # Computed once here so every return path below (success, the
+            # assignment-API error, and the outer unexpected-error handler)
+            # reports the same notice outcome — a caller or model retry needs
+            # this on ANY failure, not just success, to know whether the
+            # customer notice already went out and must not be resent.
+            message_to_customer_sent = bool(message_to_customer) and not message_send_error
+
             # Prepare request body
             request_body: Dict[str, Any] = {}
             
@@ -366,7 +373,6 @@ def create_transfer_to_human_tool(
                 if reason:
                     success_message += f". Reason: {reason}"
 
-                message_to_customer_sent = bool(message_to_customer) and not message_send_error
                 if message_to_customer_sent:
                     success_message += ". Customer was notified before the transfer."
                 elif message_send_error:
@@ -404,13 +410,27 @@ def create_transfer_to_human_tool(
                     )
                 
                 logger.error(f"Failed to transfer conversation: {error_message}")
-                
+
+                # The customer notice is a separate, already-committed POST —
+                # if it succeeded before this assignment failure, the customer
+                # was told a transfer was imminent even though none happened.
+                # Surface that here (not just on the success path) so a caller
+                # or model retry knows the notice already went out and does
+                # not resend it.
+                if message_to_customer_sent:
+                    error_message += (
+                        ". NOTE: the customer-facing notice was already sent before this failure — "
+                        "do not resend it if you retry the transfer."
+                    )
+
                 return {
                     "status": "error",
                     "message": error_message,
                     "conversation_id": effective_conversation_id,
                     "assignee_id": effective_assignee_id,
                     "error": str(api_error),
+                    "message_to_customer_sent": message_to_customer_sent,
+                    "message_to_customer_error": message_send_error,
                 }
                 
         except Exception as e:
@@ -422,6 +442,8 @@ def create_transfer_to_human_tool(
                 "conversation_id": effective_conversation_id if 'effective_conversation_id' in locals() else None,
                 "assignee_id": effective_assignee_id if 'effective_assignee_id' in locals() else None,
                 "error": str(e),
+                "message_to_customer_sent": message_to_customer_sent if 'message_to_customer_sent' in locals() else False,
+                "message_to_customer_error": message_send_error if 'message_send_error' in locals() else None,
             }
     
     # Set function metadata for better tool description
