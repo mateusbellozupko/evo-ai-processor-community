@@ -33,6 +33,20 @@ def _tokenize(text: str) -> Set[str]:
     return {word for word in _WORD_RE.findall(text.lower()) if len(word) > 3}
 
 
+def _rule_has_valid_target(rule: Dict[str, Any]) -> bool:
+    """Whether a transfer rule actually has the id its transferTo needs.
+
+    A rule can win keyword matching or the first-valid-rule fallback purely
+    on its instructions text while missing the userId/teamId its transferTo
+    requires — selecting it would leave both effective_assignee_id and
+    effective_team_id unset, a hard error later instead of trying the next
+    best-matching, actually-usable rule.
+    """
+    return (rule.get("transferTo") == "human" and bool(rule.get("userId"))) or (
+        rule.get("transferTo") == "team" and bool(rule.get("teamId"))
+    )
+
+
 def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
     """Extract conversation_id from tool_context metadata.
     
@@ -216,6 +230,9 @@ def create_transfer_to_human_tool(
                     best_rule = None
                     best_score = 0
                     for rule in available_transfer_rules:
+                        if not _rule_has_valid_target(rule):
+                            continue
+
                         instruction_words = {
                             word for word in _tokenize(rule.get("instructions") or "")
                             if word not in _STOPWORDS
@@ -233,11 +250,7 @@ def create_transfer_to_human_tool(
 
                 if selected_rule is None:
                     selected_rule = next(
-                        (
-                            rule for rule in available_transfer_rules
-                            if (rule.get("transferTo") == "human" and rule.get("userId"))
-                            or (rule.get("transferTo") == "team" and rule.get("teamId"))
-                        ),
+                        (rule for rule in available_transfer_rules if _rule_has_valid_target(rule)),
                         None,
                     )
                     if selected_rule:
