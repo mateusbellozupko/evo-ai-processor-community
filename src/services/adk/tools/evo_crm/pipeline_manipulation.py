@@ -243,6 +243,7 @@ def create_pipeline_manipulation_tool(
                     notes=notes,
                     pipeline_rules=available_pipeline_rules,
                     stage_name=stage_name,
+                    custom_fields=custom_fields,
                 )
 
             elif action == 'create_task':
@@ -451,6 +452,29 @@ async def _add_to_pipeline(
         }
 
 
+async def _find_pipeline_item_id(
+    client: EvoCrmClient,
+    pipeline_id: str,
+    conversation_id: str,
+) -> Optional[str]:
+    """Resolve a pipeline_item_id from a conversation_id.
+
+    Some endpoints (e.g. update_custom_fields) only accept the pipeline_item's own
+    id, not the conversation_id/display_id — this lists the pipeline's items and
+    matches on conversation_id, the same pattern _create_task already relied on.
+    """
+    items_endpoint = f"/pipelines/{pipeline_id}/pipeline_items"
+    items_response = await client.get(endpoint=items_endpoint)
+
+    if isinstance(items_response, dict):
+        items = items_response.get("payload", [])
+        for item in items:
+            if item.get("conversation_id") == conversation_id:
+                return item.get("id")
+
+    return None
+
+
 async def _move_to_stage(
     client: EvoCrmClient,
     pipeline_id: str,
@@ -459,6 +483,7 @@ async def _move_to_stage(
     notes: Optional[str],
     pipeline_rules: List[Dict[str, Any]],
     stage_name: Optional[str] = None,
+    custom_fields: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Move a contact to a different pipeline stage."""
 
@@ -516,6 +541,58 @@ async def _move_to_stage(
         )
 
         logger.info(f"Successfully moved to stage {stage_id}")
+
+        # CRM-XXX: custom_fields belongs on the pipeline_item (card), not the contact.
+        # move_to_stage is the action used mid-conversation once a card already exists,
+        # so this is the only place a custom field write for an existing card can happen
+        # (add_to_pipeline only covers card creation). update_custom_fields requires the
+        # real pipeline_item_id, not conversation_id, so resolve it the same way
+        # _create_task does before calling it.
+        if custom_fields:
+            try:
+                pipeline_item_id = await _find_pipeline_item_id(client, pipeline_id, conversation_id)
+                if pipeline_item_id:
+                    custom_fields_endpoint = (
+                        f"/pipelines/{pipeline_id}/pipeline_items/{pipeline_item_id}/update_custom_fields"
+                    )
+                    await client.patch(
+                        endpoint=custom_fields_endpoint,
+                        json_data={"custom_fields": custom_fields},
+                    )
+                    logger.info(
+                        f"Successfully updated custom_fields for pipeline_item {pipeline_item_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Could not resolve pipeline_item_id for conversation {conversation_id} "
+                        f"in pipeline {pipeline_id}; custom_fields were not updated."
+                    )
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Moved to stage '{stage_name}', but could not find the pipeline "
+                            f"item to update custom fields on."
+                        ),
+                        "action": "move_to_stage",
+                        "pipeline_id": pipeline_id,
+                        "stage_id": stage_id,
+                        "stage_name": stage_name,
+                        "details": response,
+                    }
+            except Exception as custom_fields_error:
+                logger.error(f"Failed to update custom_fields after move_to_stage: {custom_fields_error}")
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Moved to stage '{stage_name}', but failed to update custom fields: "
+                        f"{custom_fields_error}"
+                    ),
+                    "action": "move_to_stage",
+                    "pipeline_id": pipeline_id,
+                    "stage_id": stage_id,
+                    "stage_name": stage_name,
+                    "details": response,
+                }
 
         return {
             "status": "success",
@@ -582,20 +659,7 @@ async def _create_task(
     # Get the pipeline_item_id from conversation_id
     # We need to find the pipeline_item that matches this conversation in this pipeline
     try:
-        # First, get pipeline items to find the matching one
-        items_endpoint = f"/pipelines/{pipeline_id}/pipeline_items"
-        items_response = await client.get(
-            endpoint=items_endpoint,
-        )
-
-        # Find the pipeline item for this conversation
-        pipeline_item_id = None
-        if isinstance(items_response, dict):
-            items = items_response.get("payload", [])
-            for item in items:
-                if item.get("conversation_id") == conversation_id:
-                    pipeline_item_id = item.get("id")
-                    break
+        pipeline_item_id = await _find_pipeline_item_id(client, pipeline_id, conversation_id)
 
         if not pipeline_item_id:
             return {

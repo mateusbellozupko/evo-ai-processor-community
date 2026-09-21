@@ -55,7 +55,7 @@ class TestContextWinsOverTheModel:
         seen = {}
 
         async def fake_move(client, pipeline_id, conversation_id, stage_id, notes,
-                            pipeline_rules, stage_name=None):
+                            pipeline_rules, stage_name=None, custom_fields=None):
             seen["conversation_id"] = conversation_id
             seen["stage_id"] = stage_id
             return {"status": "success", "action": "move_to_stage"}
