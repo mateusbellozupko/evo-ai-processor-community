@@ -467,7 +467,15 @@ async def _find_pipeline_item_id(
     items_response = await client.get(endpoint=items_endpoint)
 
     if isinstance(items_response, dict):
-        items = items_response.get("payload", [])
+        # GET /pipelines/{id}/pipeline_items wraps the list under "data"
+        # (`{"success": true, "data": [...], "meta": {...}}`), not "payload" —
+        # that key belongs to a different endpoint shape (e.g. conversation
+        # labels). Reading the wrong key silently returned an empty list here,
+        # so every custom_fields-on-move and create_task call failed with
+        # "could not find the pipeline item" even when the item existed
+        # (confirmed live, 2026-09-22 — the card had already moved stage
+        # successfully by the time this lookup ran).
+        items = items_response.get("data", [])
         for item in items:
             if item.get("conversation_id") == conversation_id:
                 return item.get("id")
