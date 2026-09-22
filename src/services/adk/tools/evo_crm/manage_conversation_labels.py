@@ -12,6 +12,7 @@ tool reads the current labels first and computes the union/difference before
 writing back, preserving labels the user did not explicitly remove.
 """
 
+import time
 from typing import Any, Dict, List, Optional
 
 from google.adk.tools import FunctionTool, ToolContext
@@ -20,6 +21,15 @@ from src.services.adk.tools.evo_crm.base import EvoCrmClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# How long a fetched label catalog stays valid for reuse across multiple
+# add/remove calls within the same agent run. The catalog rarely changes
+# mid-conversation, but a `add` call always re-validated it against a fresh
+# fetch, doubling the network round trips of every label operation and
+# contributing to agent runs blowing past the upstream call timeout when the
+# model issues several add/remove calls in a row (see CRM-236 incident,
+# 2026-09-22).
+_CATALOG_CACHE_TTL_SECONDS = 30
 
 
 def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
@@ -137,6 +147,26 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
     """
 
     client = EvoCrmClient()
+    _catalog_cache: Dict[str, Any] = {"labels": None, "fetched_at": 0.0}
+
+    async def _get_catalog_labels_cached(client: EvoCrmClient) -> "tuple[bool, List[str]]":
+        """Wraps `_fetch_catalog_labels` with a short-lived cache.
+
+        Scoped to this tool instance (recreated per agent build), so the
+        cache only spans the calls made within a single agent run — exactly
+        the case where a model issues several add/remove calls in a row and
+        would otherwise re-fetch the same catalog every time.
+        """
+        now = time.monotonic()
+        cached_labels = _catalog_cache["labels"]
+        if cached_labels is not None and (now - _catalog_cache["fetched_at"]) < _CATALOG_CACHE_TTL_SECONDS:
+            return True, cached_labels
+
+        fetch_ok, titles = await _fetch_catalog_labels(client)
+        if fetch_ok:
+            _catalog_cache["labels"] = titles
+            _catalog_cache["fetched_at"] = now
+        return fetch_ok, titles
 
     async def manage_conversation_labels(
         action: str,
@@ -274,7 +304,7 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
             # without this check the model could invent labels that are
             # invisible in Settings, uncolored, and absent from label filters
             # (EVO-2248).
-            catalog_fetch_ok, catalog_labels = await _fetch_catalog_labels(client)
+            catalog_fetch_ok, catalog_labels = await _get_catalog_labels_cached(client)
 
             if not catalog_fetch_ok:
                 # Fetch genuinely failed — distinct from a successfully
@@ -328,6 +358,11 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
                     )
                 else:
                     message = "All requested labels were already present; nothing to update."
+                logger.info(
+                    "manage_conversation_labels: no new labels added for conversation "
+                    f"{effective_conversation_id} (requested={requested}, "
+                    f"already_present={already_present}, rejected={rejected})"
+                )
                 return {
                     "status": "success" if not rejected else "error",
                     "message": message,
