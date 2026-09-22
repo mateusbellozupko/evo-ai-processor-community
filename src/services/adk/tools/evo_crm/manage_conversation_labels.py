@@ -12,6 +12,7 @@ tool reads the current labels first and computes the union/difference before
 writing back, preserving labels the user did not explicitly remove.
 """
 
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -114,9 +115,28 @@ async def _fetch_catalog_labels(client: EvoCrmClient) -> "tuple[bool, List[str]]
 
 
 def _coerce_input_list(value: Any) -> List[str]:
-    """Accept either a single string or a list, return a deduped list of strings."""
+    """Accept either a single string or a list, return a deduped list of strings.
+
+    Some models (observed with GLM via OpenRouter, 2026-09-22) stringify a
+    multi-item argument instead of emitting a real JSON array — e.g.
+    ``labels='["qualificado_ntba", "reuniao_confirmada"]'`` arrives as one
+    string, not a list. Left alone, that whole bracketed string is treated
+    as a single literal label, never matches the catalog, and gets silently
+    rejected — which then reads to the model (and the user) as "the labels
+    don't exist", when they were never actually looked up. Detect this shape
+    and parse it back into a real list before doing anything else.
+    """
     if value is None:
         return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                value = parsed
     if isinstance(value, str):
         items = [value]
     elif isinstance(value, list):
