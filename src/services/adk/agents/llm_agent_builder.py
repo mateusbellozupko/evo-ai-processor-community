@@ -781,11 +781,19 @@ class LlmAgentBuilder:
                 f"Agent Timezone: {timezone}. Use this timezone when referencing dates, times, scheduling appointments, or setting reminders. All time-related information should be interpreted and expressed according to this timezone."
             )
         
-        # Add use_emojis instruction if enabled
+        # Add use_emojis instruction — explicit both ways. Previously this only
+        # injected a positive instruction when True and did nothing when False,
+        # which meant "disabled" relied entirely on the agent's own free-text
+        # instruction (or the model's default tendencies) to suppress emojis,
+        # silently failing to enforce the toggle when the operator turned it off.
         use_emojis = agent.config.get("use_emojis")
         if use_emojis:
             agent_config_sections.append(
                 "Use emojis in your responses to make communication more friendly and engaging. Incorporate appropriate emojis naturally throughout your messages."
+            )
+        else:
+            agent_config_sections.append(
+                "Do not use any emojis in your responses, under any circumstance."
             )
         
         # Add CRM tools instructions if any CRM tools are enabled
