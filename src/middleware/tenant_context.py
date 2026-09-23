@@ -72,4 +72,3 @@ class TenantContextMiddleware:
             },
             headers=getattr(exc, "headers", None),
         )
-
