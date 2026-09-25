@@ -48,3 +48,50 @@ async def test_load_memory_returns_empty_result_on_http_error_without_raising():
         result = await service.load_memory(app_name="agent-1", user_id="user-1")
 
     assert result == {"memories": [], "total": 0}
+
+
+@pytest.mark.asyncio
+async def test_load_memory_sends_explicit_min_timestamp():
+    service = HttpMemoryService(base_url="http://crm.test/api/v1")
+
+    with patch("src.services.memory_service.http_client.do_get_json", new=AsyncMock(
+        return_value={"memories": [], "total": 0, "query": ""}
+    )) as mock_get:
+        await service.load_memory(
+            app_name="agent-1", user_id="user-1", min_timestamp="2026-09-25T12:00:00Z"
+        )
+
+    parsed = urlsplit(mock_get.call_args.kwargs["url"])
+    assert parse_qs(parsed.query)["min_timestamp"] == ["2026-09-25T12:00:00Z"]
+
+
+@pytest.mark.asyncio
+async def test_load_memory_falls_back_to_context_scoped_min_timestamp():
+    from src.services.memory_service import set_memory_min_timestamp
+
+    service = HttpMemoryService(base_url="http://crm.test/api/v1")
+    set_memory_min_timestamp("2026-09-25T12:00:00Z")
+
+    try:
+        with patch("src.services.memory_service.http_client.do_get_json", new=AsyncMock(
+            return_value={"memories": [], "total": 0, "query": ""}
+        )) as mock_get:
+            await service.load_memory(app_name="agent-1", user_id="user-1")
+
+        parsed = urlsplit(mock_get.call_args.kwargs["url"])
+        assert parse_qs(parsed.query)["min_timestamp"] == ["2026-09-25T12:00:00Z"]
+    finally:
+        set_memory_min_timestamp(None)
+
+
+@pytest.mark.asyncio
+async def test_load_memory_omits_min_timestamp_when_never_scoped():
+    service = HttpMemoryService(base_url="http://crm.test/api/v1")
+
+    with patch("src.services.memory_service.http_client.do_get_json", new=AsyncMock(
+        return_value={"memories": [], "total": 0, "query": ""}
+    )) as mock_get:
+        await service.load_memory(app_name="agent-1", user_id="user-1")
+
+    parsed = urlsplit(mock_get.call_args.kwargs["url"])
+    assert "min_timestamp" not in parse_qs(parsed.query)

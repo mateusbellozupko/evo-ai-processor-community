@@ -27,6 +27,7 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
+import contextvars
 import uuid
 from typing import TYPE_CHECKING, Optional, Dict, Any, Union
 from urllib.parse import urlencode
@@ -42,6 +43,25 @@ if TYPE_CHECKING:
     from google.adk.sessions.session import Session as ADKSession
 
 logger = setup_logger(__name__)
+
+_memory_min_timestamp_ctx: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "memory_min_timestamp", default=None
+)
+
+
+def set_memory_min_timestamp(value: Optional[str]) -> None:
+    """Scope this asyncio task's subsequent load_memory/search_memory calls to
+    entries created at or after `value` (ISO 8601), or clear the scope with None.
+
+    Set once per turn by the runners (standard_runner.py / streaming_runner.py)
+    from the request metadata's `memoryMinTimestamp`. Read by both load_memory
+    (used by preload_memory, the automatic path) and search_memory (used by
+    google.adk.tools.load_memory_tool, the model's on-demand path) so a
+    conversation reopened after being resolved (EVO-2241's ai_session_epoch)
+    does not see pre-reset memory through either path, without requiring a
+    code change inside the ADK-provided load_memory_tool itself.
+    """
+    _memory_min_timestamp_ctx.set(value)
 
 
 class HttpMemoryService(BaseMemoryService):
@@ -362,6 +382,7 @@ class HttpMemoryService(BaseMemoryService):
         user_id: str,
         max_results: int = 10,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+        min_timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Load medium-term memory summaries via HTTP (GET /memory/load).
 
@@ -375,14 +396,22 @@ class HttpMemoryService(BaseMemoryService):
             user_id: User ID to load memories for
             max_results: Maximum number of summaries to return
             memory_base_config_id: Optional UUID of the memory base configuration to use
+            min_timestamp: Optional ISO 8601 floor - only memories created at or
+                after this instant are returned. Falls back to the task-scoped
+                value set by set_memory_min_timestamp() when not given explicitly.
 
         Returns:
             Dict shaped {"memories": [{"content": ..., "timestamp": ..., "metadata": {...}}], "total": N}
         """
         try:
+            effective_min_timestamp = (
+                min_timestamp if min_timestamp is not None else _memory_min_timestamp_ctx.get()
+            )
             # http_client.do_get_json does not accept a params argument, so the
             # query string is encoded into the URL here.
             params = {"app_name": str(app_name), "user_id": str(user_id), "max_results": max_results}
+            if effective_min_timestamp:
+                params["min_timestamp"] = effective_min_timestamp
             url = f"{self.base_url}/memory/load?{urlencode(params)}"
 
             headers = self._get_headers(memory_base_config_id)
@@ -412,9 +441,10 @@ class HttpMemoryService(BaseMemoryService):
         max_results: int = 10,
         db: Optional[Any] = None,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+        min_timestamp: Optional[str] = None,
     ) -> SearchMemoryResponse:
         """Search memory via HTTP.
-        
+
         Args:
             app_name: Application name (usually agent_id)
             user_id: User ID to search memories for
@@ -422,13 +452,19 @@ class HttpMemoryService(BaseMemoryService):
             max_results: Maximum number of results
             db: Database session (not used in HTTP implementation)
             memory_base_config_id: Optional memory base config ID (will use last stored if not provided)
-            
+            min_timestamp: Optional ISO 8601 floor - only memories created at or
+                after this instant are returned. Falls back to the task-scoped
+                value set by set_memory_min_timestamp() when not given explicitly.
+
         Returns:
             SearchMemoryResponse with search results
         """
         try:
             effective_memory_base_config_id = memory_base_config_id or self._last_memory_base_config_id
-            
+            effective_min_timestamp = (
+                min_timestamp if min_timestamp is not None else _memory_min_timestamp_ctx.get()
+            )
+
             # Call knowledge service HTTP API
             url = f"{self.base_url}/memory/search"
             payload = {
@@ -437,7 +473,9 @@ class HttpMemoryService(BaseMemoryService):
                 "query": query,
                 "max_results": max_results
             }
-            
+            if effective_min_timestamp:
+                payload["min_timestamp"] = effective_min_timestamp
+
             # Build headers with memory_base_config_id
             headers = self._get_headers(effective_memory_base_config_id)
 
