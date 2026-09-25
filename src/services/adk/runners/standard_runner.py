@@ -104,6 +104,15 @@ class StandardRunner:
                     f" for agent={agent_id}"
                 )
 
+            # EVO-2241 follow-up: scope this turn's memory reads (both the
+            # automatic preload_memory call below and the model's on-demand
+            # load_memory tool call later in this method) to the
+            # conversation's reopen boundary, if any. A conversation that was
+            # never reopened sends no memoryMinTimestamp, so this clears any
+            # leftover scope from this worker's prior turn.
+            from src.services.memory_service import set_memory_min_timestamp
+            set_memory_min_timestamp((metadata or {}).get("memoryMinTimestamp"))
+
             # Get and build agent
             root_agent, state_params = await self.utils.get_and_build_agent(agent_id)
 

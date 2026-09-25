@@ -39,7 +39,7 @@ def _mock_memory_service():
     return svc
 
 
-async def _drive(runner_cls, session_service, memory_service):
+async def _drive(runner_cls, session_service, memory_service, metadata=None):
     """Run either runner up to its early exit, ignoring the produced output."""
     runner = runner_cls(db=MagicMock())
     runner.utils = _mock_utils()
@@ -53,6 +53,7 @@ async def _drive(runner_cls, session_service, memory_service):
         artifacts_service=MagicMock(),
         memory_service=memory_service,
         user_id="user-1",
+        metadata=metadata,
     )
 
     if runner_cls is StandardRunner:
@@ -146,3 +147,53 @@ async def test_preload_memory_failure_is_isolated_from_knowledge_preload(runner_
     # appending anything) its result is the only event appended to the session.
     mock_preload_knowledge.assert_awaited_once()
     session_service.append_event.assert_awaited_once_with(session, ANY)
+
+
+@pytest.mark.parametrize("runner_cls", [StandardRunner, StreamingRunner])
+@pytest.mark.asyncio
+async def test_runner_scopes_memory_min_timestamp_from_request_metadata(runner_cls):
+    """EVO-2241 follow-up: a reopened conversation's memoryMinTimestamp metadata
+    must reach the ContextVar that HttpMemoryService.load_memory/search_memory
+    read, before preload_memory (and, later in the turn, the model's on-demand
+    load_memory tool) runs - otherwise both would silently ignore the reopen
+    boundary and keep serving pre-reset memory."""
+    from src.services.memory_service import _memory_min_timestamp_ctx, set_memory_min_timestamp
+
+    session_service = MagicMock()
+    session_service.append_event = AsyncMock()
+
+    try:
+        with _patch_agent(), patch(
+            "src.services.adk.runners.memory_preload.preload_memory",
+            new=AsyncMock(return_value=None),
+        ):
+            await _drive(
+                runner_cls, session_service, _mock_memory_service(),
+                metadata={"memoryMinTimestamp": "2026-09-25T12:00:00Z"},
+            )
+
+        assert _memory_min_timestamp_ctx.get() == "2026-09-25T12:00:00Z"
+    finally:
+        set_memory_min_timestamp(None)
+
+
+@pytest.mark.parametrize("runner_cls", [StandardRunner, StreamingRunner])
+@pytest.mark.asyncio
+async def test_runner_clears_memory_min_timestamp_when_never_reopened(runner_cls):
+    """A conversation that was never reopened sends no memoryMinTimestamp; the
+    scope must be cleared for this turn rather than leaking a previous turn's
+    value from the same worker process."""
+    from src.services.memory_service import _memory_min_timestamp_ctx, set_memory_min_timestamp
+
+    session_service = MagicMock()
+    session_service.append_event = AsyncMock()
+
+    set_memory_min_timestamp("2026-09-25T12:00:00Z")  # simulate a leftover from a prior turn
+
+    with _patch_agent(), patch(
+        "src.services.adk.runners.memory_preload.preload_memory",
+        new=AsyncMock(return_value=None),
+    ):
+        await _drive(runner_cls, session_service, _mock_memory_service(), metadata=None)
+
+    assert _memory_min_timestamp_ctx.get() is None
