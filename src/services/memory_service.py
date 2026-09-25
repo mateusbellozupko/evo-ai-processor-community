@@ -64,6 +64,11 @@ def set_memory_min_timestamp(value: Optional[str]) -> None:
     _memory_min_timestamp_ctx.set(value)
 
 
+def _resolve_min_timestamp(explicit: Optional[str]) -> Optional[str]:
+    """explicit wins when given; otherwise fall back to the task-scoped value."""
+    return explicit if explicit is not None else _memory_min_timestamp_ctx.get()
+
+
 class HttpMemoryService(BaseMemoryService):
     """HTTP-based memory service that uses the knowledge microservice.
     
@@ -309,7 +314,15 @@ class HttpMemoryService(BaseMemoryService):
             # Add compression_interval parameter if provided (for compression)
             if compression_interval is not None:
                 payload["compression_interval"] = compression_interval
-            
+
+            # EVO-2241: lets the controller's auto-compression trigger restrict
+            # its source events to this epoch, so it can't fold pre-reset
+            # events into a fresh summary that would otherwise sail past the
+            # read-side min_timestamp filter under its own (now) created_at.
+            effective_min_timestamp = _resolve_min_timestamp(None)
+            if effective_min_timestamp:
+                payload["min_timestamp"] = effective_min_timestamp
+
             # Build headers with memory_base_config_id
             headers = self._get_headers(memory_base_config_id)
 
@@ -336,6 +349,7 @@ class HttpMemoryService(BaseMemoryService):
         force: bool = False,
         compression_interval: Optional[int] = None,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
+        min_timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Trigger memory compression via HTTP.
 
@@ -345,6 +359,12 @@ class HttpMemoryService(BaseMemoryService):
             force: If True, compress even if compression_interval is not reached
             compression_interval: Compress every N messages (optional)
             memory_base_config_id: Optional UUID of the memory base configuration to use
+            min_timestamp: Optional ISO 8601 floor (EVO-2241) - only events created
+                at or after this instant are eligible for compression, so a fresh
+                summary can't fold in pre-reset events and sail past the read-side
+                min_timestamp filter under its own (now) created_at. Falls back to
+                the task-scoped value set by set_memory_min_timestamp() when not
+                given explicitly.
 
         Returns:
             Dict with compression result. Never raises - returns a failure dict on error.
@@ -358,6 +378,9 @@ class HttpMemoryService(BaseMemoryService):
             }
             if compression_interval is not None:
                 payload["compression_interval"] = compression_interval
+            effective_min_timestamp = _resolve_min_timestamp(min_timestamp)
+            if effective_min_timestamp:
+                payload["min_timestamp"] = effective_min_timestamp
 
             headers = self._get_headers(memory_base_config_id)
 
@@ -404,9 +427,7 @@ class HttpMemoryService(BaseMemoryService):
             Dict shaped {"memories": [{"content": ..., "timestamp": ..., "metadata": {...}}], "total": N}
         """
         try:
-            effective_min_timestamp = (
-                min_timestamp if min_timestamp is not None else _memory_min_timestamp_ctx.get()
-            )
+            effective_min_timestamp = _resolve_min_timestamp(min_timestamp)
             # http_client.do_get_json does not accept a params argument, so the
             # query string is encoded into the URL here.
             params = {"app_name": str(app_name), "user_id": str(user_id), "max_results": max_results}
@@ -461,9 +482,7 @@ class HttpMemoryService(BaseMemoryService):
         """
         try:
             effective_memory_base_config_id = memory_base_config_id or self._last_memory_base_config_id
-            effective_min_timestamp = (
-                min_timestamp if min_timestamp is not None else _memory_min_timestamp_ctx.get()
-            )
+            effective_min_timestamp = _resolve_min_timestamp(min_timestamp)
 
             # Call knowledge service HTTP API
             url = f"{self.base_url}/memory/search"

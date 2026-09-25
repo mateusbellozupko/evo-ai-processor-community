@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.services.memory_service import HttpMemoryService
+from src.services.memory_service import HttpMemoryService, set_memory_min_timestamp
 from src.utils.http import HttpError
 
 
@@ -31,3 +31,22 @@ async def test_compress_memory_returns_failure_dict_on_http_error_without_raisin
         result = await service.compress_memory(app_name="agent-1", user_id="user-1")
 
     assert result == {"success": False, "messages_compressed": 0, "message": "boom"}
+
+
+@pytest.mark.asyncio
+async def test_compress_memory_falls_back_to_context_scoped_min_timestamp():
+    """EVO-2241: compression must respect the same reopen boundary as reads,
+    so a fresh summary can't fold in pre-reset events and then sail past the
+    read-side min_timestamp filter under its own (now) created_at."""
+    service = HttpMemoryService(base_url="http://crm.test/api/v1")
+    set_memory_min_timestamp("2026-09-25T12:00:00Z")
+
+    try:
+        with patch("src.services.memory_service.http_client.do_post_json", new=AsyncMock(
+            return_value={"success": True, "messages_compressed": 5, "summary_content": "Summary."}
+        )) as mock_post:
+            await service.compress_memory(app_name="agent-1", user_id="user-1", force=True)
+
+        assert mock_post.call_args.kwargs["payload"]["min_timestamp"] == "2026-09-25T12:00:00Z"
+    finally:
+        set_memory_min_timestamp(None)
