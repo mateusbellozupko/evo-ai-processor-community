@@ -11,6 +11,8 @@ is stubbed to return None, which makes each runner take its documented
 "no meaningful content" early exit right after preload.
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -39,7 +41,7 @@ def _mock_memory_service():
     return svc
 
 
-async def _drive(runner_cls, session_service, memory_service, metadata=None):
+async def _drive(runner_cls, session_service, memory_service, metadata=None, user_id="user-1"):
     """Run either runner up to its early exit, ignoring the produced output."""
     runner = runner_cls(db=MagicMock())
     runner.utils = _mock_utils()
@@ -52,7 +54,7 @@ async def _drive(runner_cls, session_service, memory_service, metadata=None):
         session_service=session_service,
         artifacts_service=MagicMock(),
         memory_service=memory_service,
-        user_id="user-1",
+        user_id=user_id,
         metadata=metadata,
     )
 
@@ -197,3 +199,50 @@ async def test_runner_clears_memory_min_timestamp_when_never_reopened(runner_cls
         await _drive(runner_cls, session_service, _mock_memory_service(), metadata=None)
 
     assert _memory_min_timestamp_ctx.get() is None
+
+
+@pytest.mark.parametrize("runner_cls", [StandardRunner, StreamingRunner])
+@pytest.mark.asyncio
+async def test_memory_min_timestamp_does_not_leak_between_concurrent_turns(runner_cls):
+    """EVO-2241: contextvars.ContextVar is task-local by design - the property
+    that makes it safe to scope search_memory (used by the model's on-demand
+    load_memory tool) via a shared HttpMemoryService singleton, instead of
+    leaking one conversation's reopen boundary into a concurrently running
+    turn for a different conversation. Prove it end to end: two turns run
+    concurrently with different memoryMinTimestamp values, and the real
+    ContextVar-reading load_memory (not a mock of preload_memory itself) must
+    see only its own turn's value even when a scheduling yield lands squarely
+    between the ContextVar being set and load_memory being called."""
+    from src.services.memory_service import _memory_min_timestamp_ctx
+
+    seen = {}
+
+    async def _fake_load_memory(**kwargs):
+        await asyncio.sleep(0)  # yield control - give the other task a chance to run first
+        seen[kwargs["user_id"]] = _memory_min_timestamp_ctx.get()
+        return {"memories": [], "total": 0}
+
+    session_service_a = MagicMock()
+    session_service_a.append_event = AsyncMock()
+    session_service_b = MagicMock()
+    session_service_b.append_event = AsyncMock()
+
+    with _patch_agent(), patch(
+        "src.services.adk.runners.memory_preload.memory_service.load_memory",
+        new=AsyncMock(side_effect=_fake_load_memory),
+    ):
+        await asyncio.gather(
+            _drive(
+                runner_cls, session_service_a, _mock_memory_service(), user_id="user-a",
+                metadata={"memoryMinTimestamp": "2026-01-01T00:00:00Z"},
+            ),
+            _drive(
+                runner_cls, session_service_b, _mock_memory_service(), user_id="user-b",
+                metadata={"memoryMinTimestamp": "2026-02-02T00:00:00Z"},
+            ),
+        )
+
+    assert seen == {
+        "user-a": "2026-01-01T00:00:00Z",
+        "user-b": "2026-02-02T00:00:00Z",
+    }
