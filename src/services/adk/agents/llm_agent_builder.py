@@ -489,6 +489,19 @@ class LlmAgentBuilder:
         self.tool_builder = ToolBuilder()
         self.mcp_service = MCPService()
 
+    @staticmethod
+    def _as_bool(value) -> bool:
+        """Normalize a config value to a strict boolean.
+
+        Config is persisted as JSON but can arrive as a stringified
+        boolean (e.g. "false"), which Python treats as truthy — so a
+        plain `if value:` check silently enables a feature meant to be
+        disabled.
+        """
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1")
+        return bool(value)
+
     async def _agent_tools_builder(
         self, agent: Agent, processed_agents: set = None
     ) -> List[AgentTool]:
@@ -786,7 +799,7 @@ class LlmAgentBuilder:
         # which meant "disabled" relied entirely on the agent's own free-text
         # instruction (or the model's default tendencies) to suppress emojis,
         # silently failing to enforce the toggle when the operator turned it off.
-        use_emojis = agent.config.get("use_emojis")
+        use_emojis = self._as_bool(agent.config.get("use_emojis"))
         if use_emojis:
             agent_config_sections.append(
                 "Use emojis in your responses to make communication more friendly and engaging. Incorporate appropriate emojis naturally throughout your messages."
