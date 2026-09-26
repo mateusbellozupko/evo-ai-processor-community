@@ -115,15 +115,20 @@ async def run_unless_client_disconnects(
     coro: Awaitable[Any],
     *,
     label: str = "agent execution",
+    ignore_disconnect: bool = False,
 ) -> Any:
     """Await `coro`, cancelling it if the client disconnects first.
+
+    When `ignore_disconnect` is True the coroutine runs to completion even if
+    the HTTP client hangs up — use this for system-initiated work (e.g.
+    inactivity_action events) that must complete regardless of who called it.
 
     Raises ClientGoneAway after cancelling. The work's own exceptions propagate
     unchanged, so callers keep their existing error handling.
     """
     task = asyncio.ensure_future(coro)
 
-    if not cancel_on_disconnect_enabled():
+    if not cancel_on_disconnect_enabled() or ignore_disconnect:
         return await task
 
     watcher = asyncio.ensure_future(

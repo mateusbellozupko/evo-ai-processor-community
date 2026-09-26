@@ -1049,6 +1049,10 @@ async def handle_message_send(
 
         # CRM-236: bounded by whoever is waiting. When the caller hangs up the
         # run is cancelled instead of burning more of the provider's quota.
+        # Exception: inactivity_action events are fire-and-forget (Rails Sidekiq
+        # completes in ~80ms) so the processor must run to completion regardless.
+        is_inactivity_action = metadata.get("evoai_crm_event") == "inactivity_action"
+
         result = await run_unless_client_disconnects(
             request,
             run_agent(
@@ -1065,6 +1069,7 @@ async def handle_message_send(
                 user_id=user_id,  # Pass contact_id as user_id
             ),
             label=f"agent {agent_id} execution",
+            ignore_disconnect=is_inactivity_action,
         )
 
         final_response = result.get("final_response", "No response")
