@@ -1,10 +1,16 @@
 """
-Stop running an agent once nobody is waiting for the answer.
+Stop running an agent once nobody is waiting for the answer — except for
+system-initiated work that must finish regardless of who called it.
 
 CRM-236: bot-runtime closes the A2A connection at its own ceiling and the
 processor kept working for another five minutes, burning the same quota whose
 exhaustion caused the timeout. `run_unless_client_disconnects` races the work
 against the ASGI disconnect signal and cancels it when the client is gone.
+
+The one deliberate exception is `ignore_disconnect=True`: callers pass this
+for fire-and-forget, system-initiated events (e.g. inactivity_action) whose
+HTTP caller is a short-lived job that isn't waiting on the result, so the
+work must run to completion even after that caller disconnects.
 """
 
 import asyncio
