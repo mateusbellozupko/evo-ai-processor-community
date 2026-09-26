@@ -210,7 +210,19 @@ def create_transfer_to_human_tool(
                 # Preferred path: the model picked a specific rule from the
                 # numbered list in its own docstring (see transfer_rules_doc).
                 if rule_index is not None:
-                    selected_rule = available_transfer_rules[rule_index - 1]
+                    candidate_rule = available_transfer_rules[rule_index - 1]
+                    if not _rule_has_valid_target(candidate_rule):
+                        return {
+                            "status": "error",
+                            "message": (
+                                f"Transfer rule #{rule_index} is missing a valid "
+                                "assignee/team id for its transferTo type — ask an "
+                                "admin to fix this rule's configuration, or pass "
+                                "assignee_id/team_id explicitly."
+                            ),
+                            "conversation_id": effective_conversation_id,
+                        }
+                    selected_rule = candidate_rule
                     logger.info(f"Using transfer rule #{rule_index} selected by the model")
 
                 # No explicit index: previously this silently fell back to

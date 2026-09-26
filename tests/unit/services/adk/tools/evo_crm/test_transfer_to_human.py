@@ -81,4 +81,5 @@ async def test_explicit_rule_index_still_errors_on_its_own_malformed_rule():
         result = await fn(conversation_id="conv-1", rule_index=1)
 
     assert result["status"] == "error"
-    assert "assignee_id or team_id is required" in result["message"]
+    assert "Transfer rule #1" in result["message"]
+    assert "missing a valid" in result["message"]
